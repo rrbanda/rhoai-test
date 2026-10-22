@@ -1,0 +1,146 @@
+# LeaderWorkerSet Test Case 3: Distributed Work Simulation (Python)
+#
+# Validates: Leader-worker coordination pattern on CPU using Python.
+#            Leader distributes tasks via HTTP, workers process and return results.
+#            Simulates a distributed inference pattern without GPUs.
+# Image:     registry.access.redhat.com/ubi9/python-312:9.6 (no auth required)
+# Expected:  3 pods (1 leader + 2 workers). Workers pull 20 tasks from leader.
+#
+apiVersion: leaderworkerset.x-k8s.io/v1
+kind: LeaderWorkerSet
+metadata:
+  name: lws-distributed-cpu
+spec:
+  replicas: 1
+  leaderWorkerTemplate:
+    size: 3
+    restartPolicy: RecreateGroupOnPodRestart
+    leaderTemplate:
+      metadata: {}
+      spec:
+        containers:
+        - name: leader
+          image: registry.access.redhat.com/ubi9/python-312:9.6
+          command:
+          - python3
+          - -c
+          - |
+            import http.server, json, os, socketserver, threading
+
+            print("=== LWS Leader: Work Coordinator ===")
+            print(f"Pod: {os.environ.get('HOSTNAME', 'unknown')}")
+
+            work_items = [f"task-{i}" for i in range(20)]
+            results = []
+            item_index = 0
+            lock = threading.Lock()
+
+            class WorkHandler(http.server.BaseHTTPRequestHandler):
+                def do_GET(self):
+                    nonlocal item_index
+                    if self.path == "/get-work":
+                        with lock:
+                            if item_index < len(work_items):
+                                item = work_items[item_index]
+                                item_index += 1
+                                self.send_response(200)
+                                self.send_header("Content-type", "application/json")
+                                self.end_headers()
+                                self.wfile.write(json.dumps({"task": item}).encode())
+                            else:
+                                self.send_response(204)
+                                self.end_headers()
+                    elif self.path == "/status":
+                        self.send_response(200)
+                        self.send_header("Content-type", "application/json")
+                        self.end_headers()
+                        self.wfile.write(json.dumps({"total": 20, "distributed": item_index, "results": len(results)}).encode())
+                    else:
+                        self.send_response(404)
+                        self.end_headers()
+
+                def do_POST(self):
+                    if self.path == "/submit-result":
+                        length = int(self.headers.get("Content-Length", 0))
+                        result = json.loads(self.rfile.read(length))
+                        results.append(result)
+                        print(f"[Leader] Result from {result.get('worker')}: {result.get('task')}")
+                        self.send_response(200)
+                        self.end_headers()
+
+                def log_message(self, format, *args):
+                    pass
+
+            with socketserver.TCPServer(("", 8080), WorkHandler) as httpd:
+                print("[Leader] Serving on port 8080")
+                httpd.serve_forever()
+          ports:
+          - containerPort: 8080
+            protocol: TCP
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
+            limits:
+              cpu: "500m"
+              memory: "256Mi"
+    workerTemplate:
+      metadata: {}
+      spec:
+        containers:
+        - name: worker
+          image: registry.access.redhat.com/ubi9/python-312:9.6
+          command:
+          - python3
+          - -c
+          - |
+            import json, os, time, urllib.request
+
+            hostname = os.environ.get("HOSTNAME", "unknown")
+            # LWS leader is always index 0 in the group
+            group = hostname.rsplit("-", 1)[0]
+            leader = f"{group.rsplit('-', 1)[0]}"
+            print(f"=== LWS Worker: {hostname} ===")
+            print(f"Attempting leader at: {leader}")
+
+            time.sleep(5)
+
+            processed = 0
+            while True:
+                try:
+                    req = urllib.request.Request(f"http://{leader}:8080/get-work")
+                    with urllib.request.urlopen(req, timeout=10) as resp:
+                        if resp.status == 204:
+                            print(f"[{hostname}] No more work. Processed {processed} tasks total.")
+                            break
+                        task = json.loads(resp.read())
+                        print(f"[{hostname}] Processing: {task['task']}")
+                        result = sum(i * i for i in range(100000))
+                        data = json.dumps({"worker": hostname, "task": task["task"], "result": result}).encode()
+                        submit = urllib.request.Request(
+                            f"http://{leader}:8080/submit-result",
+                            data=data,
+                            headers={"Content-Type": "application/json"},
+                            method="POST"
+                        )
+                        urllib.request.urlopen(submit, timeout=10)
+                        processed += 1
+                except Exception as e:
+                    print(f"[{hostname}] Error: {e}, retrying...")
+                    time.sleep(2)
+
+            print(f"[{hostname}] Worker complete.")
+            time.sleep(30)
+          ports:
+          - containerPort: 8080
+            protocol: TCP
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
+            limits:
+              cpu: "500m"
+              memory: "256Mi"
+  networkConfig:
+    subdomainPolicy: Shared
+  startupPolicy: LeaderCreated

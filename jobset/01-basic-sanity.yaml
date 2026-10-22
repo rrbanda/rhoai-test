@@ -1,0 +1,75 @@
+# JobSet Test Case 1: Basic CPU Sanity
+#
+# Validates: JobSet controller creates, coordinates, and completes
+#            a leader + workers job group on CPU-only nodes.
+# Image:     registry.access.redhat.com/ubi9/ubi-minimal:9.6 (no auth required)
+# Expected:  3 pods (1 leader + 2 workers), all complete in ~30s
+#
+apiVersion: jobset.x-k8s.io/v1alpha2
+kind: JobSet
+metadata:
+  name: jobset-cpu-sanity
+spec:
+  successPolicy:
+    operator: All
+    targetReplicatedJobs:
+    - workers
+  replicatedJobs:
+  - name: leader
+    replicas: 1
+    template:
+      spec:
+        backoffLimit: 0
+        completions: 1
+        parallelism: 1
+        template:
+          spec:
+            containers:
+            - name: leader
+              image: registry.access.redhat.com/ubi9/ubi-minimal:9.6
+              command:
+              - /bin/sh
+              - -c
+              - |
+                echo "=== JobSet Leader Pod ==="
+                echo "Pod: $HOSTNAME"
+                echo "Leader started at $(date)"
+                sleep 30
+                echo "Leader completed at $(date)"
+              resources:
+                requests:
+                  cpu: "100m"
+                  memory: "64Mi"
+                limits:
+                  cpu: "200m"
+                  memory: "128Mi"
+            restartPolicy: Never
+  - name: workers
+    replicas: 2
+    template:
+      spec:
+        backoffLimit: 0
+        completions: 1
+        parallelism: 1
+        template:
+          spec:
+            containers:
+            - name: worker
+              image: registry.access.redhat.com/ubi9/ubi-minimal:9.6
+              command:
+              - /bin/sh
+              - -c
+              - |
+                echo "=== JobSet Worker Pod ==="
+                echo "Pod: $HOSTNAME"
+                echo "Worker started at $(date)"
+                sleep 20
+                echo "Worker completed at $(date)"
+              resources:
+                requests:
+                  cpu: "100m"
+                  memory: "64Mi"
+                limits:
+                  cpu: "200m"
+                  memory: "128Mi"
+            restartPolicy: Never

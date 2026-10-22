@@ -1,0 +1,74 @@
+# LeaderWorkerSet Test Case 2: HTTP Connectivity (nginx)
+#
+# Validates: Inter-pod network connectivity using a Red Hat nginx image.
+#            Tests DNS resolution, TCP connectivity, and HTTP between pods.
+# Image:     registry.redhat.io/rhel10/nginx-126 (requires Red Hat registry auth)
+# Expected:  6 pods (2 groups × 3 pods), all Running. nginx serves on port 8080.
+#
+# NOTE: This image is an S2I builder image. We override the command to
+#       start nginx directly. The default docroot returns 403 but HTTP
+#       connectivity (DNS, TCP, HTTP response) is fully validated.
+#
+# VERIFIED:  OCP 4.20.33, LWS Operator, 2026-10-22
+#   All 6 pods Running. curl between pods returns HTTP/1.1 403 from nginx/1.26.3
+#   (server is responding — DNS resolves and TCP connects across all pods).
+#
+apiVersion: leaderworkerset.x-k8s.io/v1
+kind: LeaderWorkerSet
+metadata:
+  name: lws-nginx-cpu
+spec:
+  replicas: 2
+  leaderWorkerTemplate:
+    size: 3
+    restartPolicy: RecreateGroupOnPodRestart
+    leaderTemplate:
+      metadata: {}
+      spec:
+        containers:
+        - name: leader
+          image: registry.redhat.io/rhel10/nginx-126
+          command:
+          - /bin/sh
+          - -c
+          - |
+            exec nginx -g "daemon off;"
+          ports:
+          - containerPort: 8080
+            protocol: TCP
+          resources:
+            requests:
+              cpu: "50m"
+              memory: "64Mi"
+            limits:
+              cpu: "200m"
+              memory: "128Mi"
+    workerTemplate:
+      metadata: {}
+      spec:
+        containers:
+        - name: worker
+          image: registry.redhat.io/rhel10/nginx-126
+          command:
+          - /bin/sh
+          - -c
+          - |
+            exec nginx -g "daemon off;"
+          ports:
+          - containerPort: 8080
+            protocol: TCP
+          resources:
+            requests:
+              cpu: "50m"
+              memory: "64Mi"
+            limits:
+              cpu: "200m"
+              memory: "128Mi"
+  networkConfig:
+    subdomainPolicy: Shared
+  rolloutStrategy:
+    type: RollingUpdate
+    rollingUpdateConfiguration:
+      maxSurge: 1
+      maxUnavailable: 1
+  startupPolicy: LeaderCreated

@@ -1,0 +1,73 @@
+# LeaderWorkerSet Test Case 1: Basic CPU Sanity
+#
+# Validates: LWS creates leader-worker groups and maintains them on CPU nodes.
+# Image:     registry.access.redhat.com/ubi9/ubi-minimal:9.6 (no auth required)
+# Expected:  6 pods (2 groups × 3 pods), all Running. 3 StatefulSets (1 parent + 2 groups).
+#
+# VERIFIED:  OCP 4.20.33, LWS Operator, 2026-10-22
+#   lws-cpu-sanity-0, 0-1, 0-2 — Running
+#   lws-cpu-sanity-1, 1-1, 1-2 — Running
+#   StatefulSets: lws-cpu-sanity 2/2, lws-cpu-sanity-0 2/2, lws-cpu-sanity-1 2/2
+#
+apiVersion: leaderworkerset.x-k8s.io/v1
+kind: LeaderWorkerSet
+metadata:
+  name: lws-cpu-sanity
+spec:
+  replicas: 2
+  leaderWorkerTemplate:
+    size: 3
+    restartPolicy: RecreateGroupOnPodRestart
+    leaderTemplate:
+      metadata: {}
+      spec:
+        containers:
+        - name: leader
+          image: registry.access.redhat.com/ubi9/ubi-minimal:9.6
+          command:
+          - /bin/sh
+          - -c
+          - |
+            echo "=== LWS Leader Pod ==="
+            echo "Pod: $HOSTNAME"
+            echo "Leader started at $(date)"
+            exec sleep infinity
+          resources:
+            requests:
+              cpu: "50m"
+              memory: "32Mi"
+            limits:
+              cpu: "100m"
+              memory: "64Mi"
+    workerTemplate:
+      metadata: {}
+      spec:
+        containers:
+        - name: worker
+          image: registry.access.redhat.com/ubi9/ubi-minimal:9.6
+          command:
+          - /bin/sh
+          - -c
+          - |
+            echo "=== LWS Worker Pod ==="
+            echo "Pod: $HOSTNAME"
+            echo "Worker started at $(date)"
+            exec sleep infinity
+          ports:
+          - containerPort: 8080
+            protocol: TCP
+          resources:
+            requests:
+              cpu: "50m"
+              memory: "32Mi"
+            limits:
+              cpu: "100m"
+              memory: "64Mi"
+  networkConfig:
+    subdomainPolicy: Shared
+  rolloutStrategy:
+    type: RollingUpdate
+    rollingUpdateConfiguration:
+      maxSurge: 1
+      maxUnavailable: 1
+  startupPolicy: LeaderCreated
